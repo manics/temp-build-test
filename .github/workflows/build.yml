@@ -15,8 +15,8 @@ env:
   # Set to "<branch-name>" to also publish on every push to <branch-name>
   PUBLISH_BRANCH: "main"
   DEV_BRANCH: dev
-  # PLATFORMS: linux/amd64,linux/arm64
-  PLATFORMS: linux/amd64
+  PLATFORMS: linux/amd64,linux/arm64
+  # PLATFORMS: linux/amd64
 
 jobs:
 
