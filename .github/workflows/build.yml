@@ -32,27 +32,11 @@ jobs:
           - arm64
     runs-on: ubuntu-24.04${{ matrix.arch == 'arm64' && '-arm' || '' }}
     outputs:
-      push: ${{ steps.check-push.outputs.push }}
+      push: ${{ steps.image.outputs.push }}
+      image: ${{ steps.image.outputs.image }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          # TODO: switch to latest=auto
-          flavor: latest=false
-          images: ${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Should container be pushed
-        id: check-push
+      - name: Image name and should it be pushed
+        id: image
         run: |
           PUSH="${{ github.event_name == 'push' &&
             (
@@ -62,10 +46,28 @@ jobs:
             )
           }}"
           echo "push=$PUSH" >> $GITHUB_OUTPUT
+          echo "image=${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # TODO: switch to latest=auto
+          flavor: latest=false
+          images: ${{ steps.image.outputs.image }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to container registry
         uses: docker/login-action@v3
-        if: ${{ steps.check-push.outputs.push == 'true' }}
+        if: ${{ steps.image.outputs.push == 'true' }}
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -78,7 +80,7 @@ jobs:
           platforms: linux/${{ matrix.arch }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          push: ${{ steps.check-push.outputs.push == 'true' }}
+          push: ${{ steps.image.outputs.push == 'true' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -116,9 +118,9 @@ jobs:
         with:
           # TODO: switch to latest=auto
           flavor: latest=false
-          images: ${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}
+          images: ${{ needs.build.outputs.image }}
 
-      - name: Set up Docker Buildx
+      - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to container registry
@@ -143,16 +145,23 @@ jobs:
           else
             DRY_RUN=--dry-run
           fi
+
+          # map meta.tags to --tag=tag1 --tag=tag2
+          # map meta.annotations to --annotations=annotation
+          # - skip empty values
+          # - remove manifest: key prefix
+
+          set -x
+
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $DRY_RUN \
-            --annotation='index:org.opencontainers.image.description=${{ github.event.repository.description }}' \
-            --annotation='index:org.opencontainers.image.created=${{ steps.timestamp.outputs.timestamp }}' \
-            --annotation='index:org.opencontainers.image.url=${{ github.event.repository.url }}' \
-            --annotation='index:org.opencontainers.image.source=${{ github.event.repository.url }}' \
-            $(printf '${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}@sha256:%s ' *)
+            \
+            $(jq -cr '.tags | map("--tag=" + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            \
+            $(jq -cr '.annotations | map(select(endswith("=") | not)) | map(sub("^manifest:"; "")) | map("--annotation=index:" + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            \
+            $(printf '${{ needs.build.outputs.image }}@sha256:%s ' *)
 
       - name: Inspect image
-        # if: ${{ needs.build.outputs.push == 'true' }}
         run: |
-          docker buildx imagetools inspect '${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.version }}'
+          docker buildx imagetools inspect "${{ needs.build.outputs.image }}:$DOCKER_METADATA_OUTPUT_VERSION"
