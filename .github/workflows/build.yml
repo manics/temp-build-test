@@ -55,8 +55,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # TODO: switch to latest=auto
-          flavor: latest=false
+          # Minimal tags since we'll create proper tags in the merge step
+          # tags: type=ref
+          flavor: |
+            suffix=-${{ matrix.arch }}
           images: ${{ steps.image.outputs.image }}
 
       - name: Set up QEMU
@@ -116,8 +118,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # TODO: switch to latest=auto
-          flavor: latest=false
+          flavor: latest=auto
           images: ${{ needs.build.outputs.image }}
 
       - name: Setup Docker Buildx
@@ -131,12 +132,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get timestamp
-        # Used for annotating the Docker manifest list.
-        id: timestamp
-        run: |
-          echo "timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_OUTPUT
-
       - name: Create manifest list and push
         working-directory: build-digests
         run: |
@@ -148,7 +143,6 @@ jobs:
 
           # map meta.tags to --tag=tag1 --tag=tag2
           # map meta.annotations to --annotations=annotation
-          # - skip empty values
           # - remove manifest: key prefix
 
           set -x
@@ -158,7 +152,7 @@ jobs:
             \
             $(jq -cr '.tags | map("--tag=" + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             \
-            $(jq -cr '.annotations | map(select(endswith("=") | not)) | map(sub("^manifest:"; "")) | map("--annotation=index:" + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(jq -cr '.annotations | map(sub("^manifest:"; "")) | map("--annotation=index:" + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             \
             $(printf '${{ needs.build.outputs.image }}@sha256:%s ' *)
 
