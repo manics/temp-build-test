@@ -15,14 +15,24 @@ env:
   # Set to "<branch-name>" to also publish on every push to <branch-name>
   PUBLISH_BRANCH: "main"
   DEV_BRANCH: dev
-  PLATFORMS: linux/amd64,linux/arm64
-  # PLATFORMS: linux/amd64
 
 jobs:
 
+  # Build a multi-arch image using native runners (takes too long with emulation)
+  # Based on
+  # https://github.com/sredevopsorg/multi-arch-docker-github-workflow/blob/0fe24c85ac35652bc7eb4e0788f20dbcc05e9643/.github/workflows/multi-build.yaml
+
   build:
     name: Build
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - arm64
+    runs-on: ubuntu-24.04${{ matrix.arch == 'arm64' && '-arm' || '' }}
+    outputs:
+      push: ${{ steps.check-push.outputs.push }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -31,6 +41,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
+          # TODO: switch to latest=auto
           flavor: latest=false
           images: ${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}
 
@@ -41,6 +52,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Should container be pushed
+        id: check-push
         run: |
           PUSH="${{ github.event_name == 'push' &&
             (
@@ -49,23 +61,98 @@ jobs:
               startsWith(github.ref, 'refs/tags/')
             )
           }}"
-          echo PUSH="$PUSH" >> $GITHUB_ENV
+          echo "push=$PUSH" >> $GITHUB_OUTPUT
 
       - name: Login to container registry
         uses: docker/login-action@v3
-        if: ${{ env.PUSH == 'true' }}
+        if: ${{ steps.check-push.outputs.push == 'true' }}
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push to container registry
+        id: build
         uses: docker/build-push-action@v6
         with:
-          # Needed so that .git directory is available to embed version info
-          platforms: ${{ env.PLATFORMS }}
+          platforms: linux/${{ matrix.arch }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          push: ${{ env.PUSH }}
+          push: ${{ steps.check-push.outputs.push == 'true' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Export digest
+        run: |
+          mkdir build-digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "build-digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v6
+        with:
+          name: digests-${{ matrix.arch }}
+          path: build-digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    # Merges Docker manifests for the different platforms
+    name: Merge manifests
+    runs-on: ubuntu-24.04
+    needs:
+      - build
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v7
+        with:
+          path: build-digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # TODO: switch to latest=auto
+          flavor: latest=false
+          images: ${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to container registry
+        uses: docker/login-action@v3
+        if: ${{ needs.build.outputs.push == 'true' }}
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get timestamp
+        # Used for annotating the Docker manifest list.
+        id: timestamp
+        run: |
+          echo "timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_OUTPUT
+
+      - name: Create manifest list and push
+        working-directory: build-digests
+        run: |
+          if [ "${{ needs.build.outputs.push }}" = "true" ]; then
+            DRY_RUN=
+          else
+            DRY_RUN=--dry-run
+          fi
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $DRY_RUN \
+            --annotation='index:org.opencontainers.image.description=${{ github.event.repository.description }}' \
+            --annotation='index:org.opencontainers.image.created=${{ steps.timestamp.outputs.timestamp }}' \
+            --annotation='index:org.opencontainers.image.url=${{ github.event.repository.url }}' \
+            --annotation='index:org.opencontainers.image.source=${{ github.event.repository.url }}' \
+            $(printf '${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect image
+        # if: ${{ needs.build.outputs.push == 'true' }}
+        run: |
+          docker buildx imagetools inspect '${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.version }}'
