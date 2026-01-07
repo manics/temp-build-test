@@ -6,5 +6,6 @@ WORKDIR /home/ubuntu
 
 ARG VERSION=1
 
-RUN uname -a
-RUN date > base.txt
+RUN echo $PARENT_IMAGE > base.txt
+RUN uname -a >> base.txt
+RUN date >> base.txt
