@@ -43,18 +43,36 @@ jobs:
       #   id: meta
       #   uses: docker/metadata-action@v5
       #   with:
-      #     images: ${{ steps.image.outputs.image }}
+      #     # Dummy image, just so we can get standard tags
+      #     images: ${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}
 
-  build-all:
+  build-base:
     needs:
       - env
-    name: Build a hierarchy of images
-    uses: ./.github/workflows/build-image.yml
+    name: Build base
     permissions:
       contents: read
       packages: write
+    uses: ./.github/workflows/build-image.yml
     with:
       path: ./base
-      image: "${{ needs.env.outputs.image }}"
+      parent: docker.io/library/ubuntu:24.04
+      image: "${{ needs.env.outputs.image }}-base"
+      push: "${{ needs.env.outputs.push }}"
+      registry: "${{ needs.env.outputs.registry }}"
+
+  build-derived:
+    needs:
+      - env
+      - build-base
+    name: Build derived
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-image.yml
+    with:
+      path: ./derived
+      parent: ${{ needs.env.outputs.image }}-base@${{ needs.build-base.outputs.digest }}
+      image: "${{ needs.env.outputs.image }}-derived"
       push: "${{ needs.env.outputs.push }}"
       registry: "${{ needs.env.outputs.registry }}"

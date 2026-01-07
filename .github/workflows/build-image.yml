@@ -8,16 +8,19 @@ on:
       image:
         required: true
         type: string
+      parent:
+        required: true
+        type: string
       push:
         required: true
         type: string
       registry:
         required: true
         type: string
-      # docker_metadata:
-      #   # $DOCKER_METADATA_OUTPUT_JSON
-      #   required: true
-      #   type: string
+    outputs:
+      digest:
+        description: Digest of the fat multi-arch index
+        value: ${{ jobs.merge.outputs.digest }}
 
 permissions:
   contents: read
@@ -38,8 +41,6 @@ jobs:
           - arm64
     runs-on: ubuntu-24.04${{ matrix.arch == 'arm64' && '-arm' || '' }}
     steps:
-      # - name: Checkout
-      #   uses: actions/checkout@v6
 
       - name: Docker meta
         id: meta
@@ -86,6 +87,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           load: ${{ inputs.push != 'true' }}
           push: ${{ inputs.push == 'true' }}
+          build-args: PARENT_IMAGE=${{ inputs.parent }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -109,6 +111,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs:
       - build
+    outputs:
+      digest: ${{ steps.index.outputs.digest }}
     if: ${{ inputs.push == 'true' }}
     steps:
       - name: Download digests
@@ -148,9 +152,10 @@ jobs:
             $(jq -cr '.annotations | map(sub("^manifest:"; "")) | map("--annotation=index:" + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             \
             $(printf '${{ inputs.image }}@sha256:%s ' *)
-        # env:
-        #   DOCKER_METADATA_OUTPUT_JSON: ${{ inputs.docker_metadata }}
 
-      - name: Inspect image
+      - name: Inspect image and get sha256 of fat index
+        id: index
         run: |
           docker buildx imagetools inspect "${{ inputs.image }}:$DOCKER_METADATA_OUTPUT_VERSION"
+
+          printf "digest=sha256:%s\n" $(docker buildx imagetools inspect "${{ inputs.image }}:$DOCKER_METADATA_OUTPUT_VERSION" --raw | sha256sum | awk '{print $1}') >> $GITHUB_OUTPUT
