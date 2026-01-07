@@ -39,13 +39,6 @@ jobs:
           echo "push=$PUSH" >> $GITHUB_OUTPUT
           echo "image=${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}" >> $GITHUB_OUTPUT
 
-      # - name: Docker meta
-      #   id: meta
-      #   uses: docker/metadata-action@v5
-      #   with:
-      #     # Dummy image, just so we can get standard tags
-      #     images: ${{ env.REGISTRY }}/${{ env.OWNER_IMAGE }}
-
   build-base:
     needs:
       - env
@@ -55,7 +48,7 @@ jobs:
       packages: write
     uses: ./.github/workflows/build-image.yml
     with:
-      path: ./base
+      path: base
       parent: docker.io/library/ubuntu:24.04
       image: "${{ needs.env.outputs.image }}-base"
       push: "${{ needs.env.outputs.push }}"
@@ -71,7 +64,7 @@ jobs:
       packages: write
     uses: ./.github/workflows/build-image.yml
     with:
-      path: ./derived
+      path: derived
       parent: ${{ needs.env.outputs.image }}-base@${{ needs.build-base.outputs.digest }}
       image: "${{ needs.env.outputs.image }}-derived"
       push: "${{ needs.env.outputs.push }}"

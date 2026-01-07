@@ -42,6 +42,16 @@ jobs:
     runs-on: ubuntu-24.04${{ matrix.arch == 'arm64' && '-arm' || '' }}
     steps:
 
+      - name: Verify inputs
+        run: |
+          # Artifact name is created using path and is later matched using a -* wildcard
+          # so make sure - isn't part of the name
+          if [[ ${{ inputs.path }} == *-* ]]
+          then
+            echo "inputs.path must not contain -"
+            exit 1
+          fi
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -97,10 +107,11 @@ jobs:
           digest="${{ steps.build.outputs.digest }}"
           touch "build-digests/${digest#sha256:}"
 
+      # Artifact names must be unique for each job, so use path input
       - name: Upload digest
         uses: actions/upload-artifact@v6
         with:
-          name: digests-${{ matrix.arch }}
+          name: digests-${{ inputs.path }}-${{ matrix.arch }}
           path: build-digests/*
           if-no-files-found: error
           retention-days: 1
@@ -118,8 +129,8 @@ jobs:
       - name: Download digests
         uses: actions/download-artifact@v7
         with:
+          pattern: digests-${{ inputs.path }}-*
           path: build-digests
-          pattern: digests-*
           merge-multiple: true
 
       - name: Docker meta
@@ -139,6 +150,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create manifest list and push
+        # Arch digests are empty files where the filename is the digest, so *
+        # gives us all digests
         working-directory: build-digests
         run: |
           # map meta.tags to --tag=tag1 --tag=tag2
