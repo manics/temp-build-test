@@ -54,7 +54,7 @@ jobs:
       contents: read
       packages: write
     with:
-      path: .
+      path: ./base
       image: "${{ needs.env.outputs.image }}"
       push: "${{ needs.env.outputs.push }}"
       registry: "${{ needs.env.outputs.registry }}"
